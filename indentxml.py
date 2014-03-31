@@ -2,18 +2,18 @@ import sublime
 import sublime_plugin
 import re
 import json
+import os.path
 from xml.dom.minidom import *
-from os.path import basename
-
 
 class BaseIndentCommand(sublime_plugin.TextCommand):
     def __init__(self, view):
         self.view = view
         self.language = self.get_language()
+        self.filename = view.file_name()
 
-    def get_language(self):        
+    def get_language(self):
         syntax = self.view.settings().get('syntax')
-        language = basename(syntax).replace('.tmLanguage', '').lower() if syntax != None else "plain text"
+        language = os.path.basename(syntax).replace('.tmLanguage', '').lower() if syntax != None else "plain text"
         return language
 
     def check_enabled(self, lang):
@@ -34,6 +34,25 @@ class BaseIndentCommand(sublime_plugin.TextCommand):
         """
         Main plugin logic for the 'indent' command.
         """
+
+        if self.filename == None:
+            return False
+
+        extensions = [
+            '.sublime-build',
+            '.sublime-commands',
+            '.sublime-completions',
+            '.sublime-keymap',
+            '.sublime-menu',
+            '.sublime-mousemap',
+            '.sublime-project',
+            '.sublime-settings',
+            '.sublime-workspace',
+        ]
+
+        if os.path.splitext(self.filename)[1] in extensions:
+            return
+
         view = self.view
         regions = view.sel()
         # if there are more than 1 region or region one and it's not empty
@@ -52,7 +71,7 @@ class BaseIndentCommand(sublime_plugin.TextCommand):
 
 class AutoIndentCommand(BaseIndentCommand):
     def get_text_type(self, s):
-        language =  self.language 
+        language =  self.language
         if language == 'xml':
             return 'xml'
         if language == 'json':
@@ -73,7 +92,7 @@ class AutoIndentCommand(BaseIndentCommand):
             command = IndentJsonCommand(self.view)
         if text_type == 'notsupported':
             return s
-        
+
         return command.indent(s)
 
     def check_enabled(self, lang):
@@ -81,14 +100,14 @@ class AutoIndentCommand(BaseIndentCommand):
 
 
 class IndentXmlCommand(BaseIndentCommand):
-    def indent(self, s):                
+    def indent(self, s):
         # convert to utf
-        s = s.encode("utf-8") 
+        s = s.encode("utf-8")
         xmlheader = re.compile(b"<\?.*\?>").match(s)
         # convert to plain string without indents and spaces
         s = re.compile(b'>\s+([^\s])', re.DOTALL).sub(b'>\g<1>', s)
         # replace tags to convince minidom process cdata as text
-        s = s.replace(b'<![CDATA[', b'%CDATAESTART%').replace(b']]>', b'%CDATAEEND%') 
+        s = s.replace(b'<![CDATA[', b'%CDATAESTART%').replace(b']]>', b'%CDATAEEND%')
         try:
             s = parseString(s).toprettyxml()
         except Exception as e:
@@ -100,8 +119,8 @@ class IndentXmlCommand(BaseIndentCommand):
         s = s.replace('%CDATAESTART%', '<![CDATA[').replace('%CDATAEEND%', ']]>')
         # remove xml header
         s = s.replace("<?xml version=\"1.0\" ?>", "").strip()
-        if xmlheader: 
-                s = xmlheader.group().decode("utf-8") + "\n" + s 
+        if xmlheader:
+                s = xmlheader.group().decode("utf-8") + "\n" + s
         return s
 
     def check_enabled(self, language):
@@ -109,9 +128,24 @@ class IndentXmlCommand(BaseIndentCommand):
 
 
 class IndentJsonCommand(BaseIndentCommand):
+
+    line_comment_re = re.compile(r'[ \t]*//.*')
+    block_comment_re = re.compile(r'/\*(.*?)\*/', re.DOTALL)
+    inner_re = re.compile(r'^([^\r\n]*?(\r?\n|$))', re.MULTILINE)
+
+    @classmethod
+    def strip_comment(cls, match):
+        """Return a block comment stripped of all content on each line, but leaving the EOL."""
+        inner = cls.inner_re.sub(r'\2', match.group(1))
+        return inner
+
     def check_enabled(self, language):
         return ((language == "json") or (language == "plain text"))
 
     def indent(self, s):
+
+        s = self.line_comment_re.sub('', s)
+        s = self.block_comment_re.sub(self.strip_comment, s)
         parsed = json.loads(s)
+
         return json.dumps(parsed, sort_keys=True, indent=4, separators=(',', ': '))
